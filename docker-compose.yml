@@ -1,0 +1,10 @@
+services:
+  volleyball-zone:
+    build: .
+    container_name: volleyball-zone
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"   # Зөвхөн дотроо. Гаднаас Caddy/nginx (HTTPS)-ээр дамжина
+    volumes:
+      - ./data:/app/data       # Өгөгдөл, нууц түлхүүр, нөөц энд хадгалагдана

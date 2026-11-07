@@ -1,0 +1,17 @@
+{
+  "name": "volleyball-zone-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Volleyball Zone: апп, өгөгдлийн сан, Gmail-ээс банкны төлбөр унших сервер",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "token": "node server.js token",
+    "test": "node test/run.js"
+  },
+  "dependencies": {
+    "imapflow": "2.5.8",
+    "mailparser": "3.10.0"
+  }
+}

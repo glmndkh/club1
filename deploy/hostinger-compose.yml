@@ -1,0 +1,39 @@
+# Hostinger Docker Manager-т зориулсан тохиргоо.
+# Кодыг GitHub-аас татаж ажиллуулна. Серверийн ямар ч порт эзлэхгүй.
+# Нийтийн туршилтын хаягийг Cloudflare tunnel гаргана (tunnel контейнерийн логт https://…trycloudflare.com).
+name: volleyball-zone
+services:
+  app:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      DATA_DIR: /data
+      TRUST_PROXY: "true"
+      SCAN_MINUTES: "5"
+      REPO_TARBALL: https://codeload.github.com/glmndkh/club1/tar.gz/refs/heads/main
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        rm -rf /app/src && mkdir -p /app/src
+        wget -qO- "$$REPO_TARBALL" | tar xz --strip-components=1 -C /app/src
+        cd /app/src
+        npm ci --omit=dev --no-audit --no-fund
+        exec node server.js
+    volumes:
+      - vz-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 60s
+      timeout: 5s
+      start_period: 120s
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.1
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://app:8080
+    depends_on:
+      - app
+volumes:
+  vz-data:

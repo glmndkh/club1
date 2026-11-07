@@ -1,0 +1,6 @@
+# Caddy автоматаар үнэгүй HTTPS (Let's Encrypt) гэрчилгээ авна.
+# "club.example.mn"-ийг өөрийн домэйнээр солино. Домэйны A бичлэг серверийн IP руу заасан байх ёстой.
+club.example.mn {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080
+}

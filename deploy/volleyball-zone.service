@@ -1,0 +1,23 @@
+# Docker ашиглахгүй бол systemd-ээр ажиллуулна.
+# Суулгах: sudo cp deploy/volleyball-zone.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now volleyball-zone
+[Unit]
+Description=Volleyball Zone server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=volleyball
+WorkingDirectory=/opt/volleyball-zone-server
+EnvironmentFile=/opt/volleyball-zone-server/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/volleyball-zone-server/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
