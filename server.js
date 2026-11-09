@@ -64,6 +64,8 @@ function createApp(opts = {}) {
       configured: !!(g && g.user && g.pass), user: g ? g.user : '', lastScan: store.mail.lastScan, lastOk: store.mail.lastOk,
       error: store.mail.error || '', accounts: clubAccounts(), scanMinutes,
       suspicious: store.inbox.filter(r => r.status === 'suspicious').length,
+      lastStats: store.mail.lastStats || null,
+      recent: (store.mail.recent || []).slice(0, 15),
     };
   }
   async function scan() {
@@ -76,21 +78,26 @@ function createApp(opts = {}) {
         if (!accounts.length) throw new Error('Клубийн дансны дугаар тохируулаагүй байна (Клубийн тохиргоо → Gmail холболт).');
         const seen = new Set(store.mail.seen);
         const mails = await mailer.fetchBankMails(g, seen, 14);
-        let added = 0;
+        let added = 0, club = 0;
         await store.lock(() => {
           const refs = new Set(store.inbox.map(r => r.ref));
+          const recent = store.mail.recent || [];
           for (const m of mails) {
             store.mail.seen.push(m.id);
-            const row = bank.mailToRow(m, accounts);
+            const { row, info } = bank.inspectMail(m, accounts);
+            if (info) recent.unshift(info);
+            if (row) club++;
             if (row && !refs.has(row.ref)) { store.inbox.push(row); refs.add(row.ref); added++; }
           }
+          store.mail.recent = recent.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 30);
           store.mail.seen = store.mail.seen.slice(-5000);
           store.mail.lastScan = store.mail.lastOk = new Date().toISOString();
+          store.mail.lastStats = { at: store.mail.lastScan, checked: mails.length, club, added };
           store.mail.error = '';
           if (added) store.saveInbox();
           store.saveMail();
         });
-        if (added) console.log(`[gmail] ${added} шинэ гүйлгээ`);
+        if (mails.length) console.log(`[gmail] ${mails.length} шинэ банкны мэйл уншлаа, клубийн дансанд орсон: ${club}, шинээр нэмсэн: ${added}`);
         return added;
       } catch (e) {
         store.mail.lastScan = new Date().toISOString();
@@ -344,6 +351,12 @@ function createApp(opts = {}) {
         applications: (store.db.state && store.db.state.applications) || [], mail: mailStatus() };
       case 'save': return { ...(await save(p.state, p.baseRev)), ...base };
       case 'markInbox': return markInbox(p.refs, p.status);
+      case 'rescan': {
+        need('owner');
+        await store.lock(() => { store.mail.seen = []; store.mail.recent = []; store.saveMail(); });
+        const added = await scan();
+        return { ok: true, ...base, added, inbox: pendingInbox(), mail: mailStatus() };
+      }
       case 'scanNow': { need('owner', 'manager'); const added = await scan(); return { ok: true, ...base, added, inbox: pendingInbox(), mail: mailStatus() }; }
       case 'gmailSave': {
         need('owner');
