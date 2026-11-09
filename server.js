@@ -113,14 +113,54 @@ function createApp(opts = {}) {
   if (timer && timer.unref) timer.unref();
 
   /* ---------- Хэрэглэгч ба нэвтрэлт ---------- */
-  const ROLES = ['owner', 'manager', 'coach'];
+  const ROLES = ['owner', 'manager', 'coach', 'student'];
+  const STUDENT_ACTIONS = ['logout', 'changePassword', 'ping', 'load', 'poll', 'studentTaskDone'];
+  const validLogin = (id, role) => role === 'student' ? (/^[a-z0-9._-]{3,40}$/.test(id) || validEmail(id)) : validEmail(id);
   const SESSION_MS = 30 * 864e5;
   const tokHash = t => crypto.createHash('sha256').update(String(t || '')).digest('hex');
   const normEmail = e => String(e || '').trim().toLowerCase();
   const validEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
   function validPassword(p) { if (String(p || '').length < 8) throw new Error('Нууц үг дор хаяж 8 тэмдэгт байна.'); }
   function publicUser(u) {
-    return { id: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role, coachId: u.coachId || '', active: u.active !== false };
+    return { id: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role, coachId: u.coachId || '', memberId: u.memberId || '', active: u.active !== false };
+  }
+
+  /** Сурагчид зөвхөн өөрийнх нь мэдээллийг өгнө (бусад хүүхдийн нэр, утас, төлбөр орохгүй). */
+  function studentState(me) {
+    const st = store.db.state;
+    if (!st) return null;
+    const m = (st.members || []).find(x => x.id === me.memberId);
+    if (!m) return null;
+    const att = {};
+    for (const [k, v] of Object.entries(st.attendance || {})) if (k.endsWith('|' + m.id)) att[k] = v;
+    const tasks = (st.tasks || []).filter(t => t.memberId === m.id);
+    const progIds = new Set(tasks.map(t => t.programId));
+    return {
+      ...st,
+      members: [m], tasks, attendance: att,
+      programs: (st.programs || []).filter(p => progIds.has(p.id)),
+      classes: (st.classes || []).filter(c => c.id === m.classId),
+      coaches: (st.coaches || []).map(c => ({ id: c.id, clubId: c.clubId, name: c.name })),
+      manualPayments: (st.manualPayments || []).filter(p => p.memberId === m.id).map(p => ({ ...p, staff: '' })),
+      transactions: (st.transactions || []).filter(t => (t.allocations || []).some(a => a.memberId === m.id))
+        .map(t => ({ ...t, allocations: t.allocations.filter(a => a.memberId === m.id), payerAccount: '', excess: 0 })),
+      applications: [], notifications: [], audit: [], payerCredits: {}, refunds: [], transfers: [], gmailSeen: [],
+      bank: { connected: false, connectedAt: null, inbox: '' },
+    };
+  }
+
+  function studentTaskDone(p, me) {
+    return store.lock(() => {
+      const st = store.db.state;
+      const t = st && (st.tasks || []).find(x => x.id === p.taskId && x.memberId === me.memberId);
+      if (!t) throw new Error('Дасгал олдсонгүй.');
+      if (t.status !== 'assigned') return { ok: true, rev: store.db.rev };
+      t.status = 'pending'; t.markedBy = 'student'; t.markedAt = ubDate();
+      (st.audit = st.audit || []).unshift({ date: ubDate(), text: `${me.name} дасгалаа хийсэн гэж тэмдэглэв` });
+      store.db.rev++;
+      store.saveDb();
+      return { ok: true, rev: store.db.rev, state: studentState(me) };
+    });
   }
   function authUser(token) {
     if (!token) return null;
@@ -142,6 +182,8 @@ function createApp(opts = {}) {
   }
   const activeOwners = except => store.users.filter(u => u.role === 'owner' && u.active !== false && u.id !== except).length;
   const usersList = () => ({ ok: true, users: store.users.map(publicUser) });
+  /** Gmail-ийн дэлгэрэнгүй (хаяг, банкны мэйлүүд) зөвхөн эзэнд. */
+  const mailFor = me => me.role === 'owner' ? mailStatus() : { configured: !!(store.secrets.gmail && store.secrets.gmail.user) };
 
   /** Анхны тохиргоо: клуб ба эзний бүртгэл үүсгэнэ. Хэрэглэгч байхгүй үед л ажиллана. */
   function setup(p) {
@@ -172,13 +214,19 @@ function createApp(opts = {}) {
 
   function userCreate(p) {
     const email = normEmail(p.email), name = clip(p.name, 90).trim(), role = String(p.role || '');
-    if (!name || !validEmail(email)) throw new Error('Нэр, имэйлээ зөв оруулна уу.');
     if (!ROLES.includes(role)) throw new Error('Үүрэг буруу байна.');
+    if (!name || !validLogin(email, role)) throw new Error(role === 'student' ? 'Нэвтрэх нэр 3–40 тэмдэгт (латин жижиг үсэг, тоо, . _ -) байна.' : 'Нэр, имэйлээ зөв оруулна уу.');
     validPassword(p.password);
     return store.lock(() => {
-      if (store.users.some(u => u.email === email)) throw new Error('Энэ имэйлтэй ажилтан бүртгэлтэй байна.');
+      if (store.users.some(u => u.email === email)) throw new Error('Энэ нэвтрэх нэр/имэйл бүртгэлтэй байна.');
+      let memberId = '';
+      if (role === 'student') {
+        memberId = clip(p.memberId, 60);
+        if (!(store.db.state && (store.db.state.members || []).some(m => m.id === memberId))) throw new Error('Сурагч олдсонгүй.');
+        if (store.users.some(u => u.role === 'student' && u.memberId === memberId)) throw new Error('Энэ сурагчид нэвтрэх эрх аль хэдийн үүссэн байна.');
+      }
       store.users.push({ id: 'u_' + crypto.randomBytes(6).toString('hex'), name, email, phone: clip(p.phone, 30), role,
-        coachId: clip(p.coachId, 60), active: true, passwordHash: hashPassword(p.password), createdAt: new Date().toISOString() });
+        coachId: clip(p.coachId, 60), memberId, active: true, passwordHash: hashPassword(p.password), createdAt: new Date().toISOString() });
       store.saveUsers();
       return usersList();
     });
@@ -192,9 +240,10 @@ function createApp(opts = {}) {
       if (p.name !== undefined) { next.name = clip(p.name, 90).trim(); if (!next.name) throw new Error('Нэрээ оруулна уу.'); }
       if (p.phone !== undefined) next.phone = clip(p.phone, 30);
       if (p.coachId !== undefined) next.coachId = clip(p.coachId, 60);
+      if (p.role !== undefined && (u.role === 'student') !== (p.role === 'student')) throw new Error('Сурагчийн эрхийг ажилтны эрх болгох боломжгүй.');
       if (p.email !== undefined) {
         next.email = normEmail(p.email);
-        if (!validEmail(next.email)) throw new Error('Имэйлээ зөв оруулна уу.');
+        if (!validLogin(next.email, u.role)) throw new Error('Нэвтрэх нэр/имэйлээ зөв оруулна уу.');
         if (store.users.some(x => x.id !== u.id && x.email === next.email)) throw new Error('Энэ имэйлтэй ажилтан бүртгэлтэй байна.');
       }
       if (p.role !== undefined) { if (!ROLES.includes(p.role)) throw new Error('Үүрэг буруу байна.'); next.role = p.role; }
@@ -339,16 +388,23 @@ function createApp(opts = {}) {
     const me = authUser(p.token);
     if (!me) return { ok: false, auth: true, error: 'Нэвтрэх хугацаа дууссан. Дахин нэвтэрнэ үү.' };
     const need = (...roles) => { if (!roles.includes(me.role)) throw new Error('Энэ үйлдлийг хийх эрх танд алга.'); };
+    if (me.role === 'student') {
+      if (!STUDENT_ACTIONS.includes(p.action)) throw new Error('Энэ үйлдлийг хийх эрх танд алга.');
+      if (p.action === 'load') return { ok: true, ...base, rev: store.db.rev, appsRev: store.db.appsRev, state: studentState(me), inbox: [] };
+      if (p.action === 'poll') return { ok: true, ...base, rev: store.db.rev, appsRev: store.db.appsRev, inbox: [], applications: [] };
+      if (p.action === 'ping') return { ok: true, ...base, user: publicUser(me), rev: store.db.rev };
+      if (p.action === 'studentTaskDone') return { ...(await studentTaskDone(p, me)), ...base };
+    }
     switch (p.action) {
       case 'logout': delete store.sessions[tokHash(p.token)]; store.saveSessions(); return { ok: true };
       case 'changePassword': return changePassword(p, me);
       case 'users': need('owner'); return usersList();
       case 'userCreate': need('owner'); return userCreate(p);
       case 'userUpdate': need('owner'); return userUpdate(p, me);
-      case 'ping': return { ok: true, ...base, user: publicUser(me), rev: store.db.rev, appsRev: store.db.appsRev, mail: mailStatus() };
-      case 'load': return { ok: true, ...base, rev: store.db.rev, appsRev: store.db.appsRev, state: store.db.state, inbox: pendingInbox(), mail: mailStatus() };
+      case 'ping': return { ok: true, ...base, user: publicUser(me), rev: store.db.rev, appsRev: store.db.appsRev, mail: mailFor(me) };
+      case 'load': return { ok: true, ...base, rev: store.db.rev, appsRev: store.db.appsRev, state: store.db.state, inbox: pendingInbox(), mail: mailFor(me) };
       case 'poll': return { ok: true, ...base, rev: store.db.rev, appsRev: store.db.appsRev, inbox: pendingInbox(),
-        applications: (store.db.state && store.db.state.applications) || [], mail: mailStatus() };
+        applications: (store.db.state && store.db.state.applications) || [], mail: mailFor(me) };
       case 'save': return { ...(await save(p.state, p.baseRev)), ...base };
       case 'markInbox': return markInbox(p.refs, p.status);
       case 'rescan': {
@@ -357,7 +413,7 @@ function createApp(opts = {}) {
         const added = await scan();
         return { ok: true, ...base, added, inbox: pendingInbox(), mail: mailStatus() };
       }
-      case 'scanNow': { need('owner', 'manager'); const added = await scan(); return { ok: true, ...base, added, inbox: pendingInbox(), mail: mailStatus() }; }
+      case 'scanNow': { need('owner', 'manager'); const added = await scan(); return { ok: true, ...base, added, inbox: pendingInbox(), mail: mailFor(me) }; }
       case 'gmailSave': {
         need('owner');
         const user = clip(p.user, 120).trim(), pass = String(p.pass || '').replace(/\s+/g, '');
