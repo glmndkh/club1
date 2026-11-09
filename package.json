@@ -7,7 +7,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node server.js",
-    "token": "node server.js token",
+    "reset-password": "node server.js reset-password",
     "test": "node test/run.js"
   },
   "dependencies": {
