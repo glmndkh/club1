@@ -1,0 +1,15 @@
+# Тогтвортой туршилтын хаяг: tunnel-ийг апп-аас тусад нь ажиллуулна.
+# Апп (volleyball-zone) шинэчлэгдэж дахин асахад энэ хаяг солигдохгүй.
+# Хаяг зөвхөн сервер бүхэлдээ дахин асах үед солигдоно. Байнгын хаягт ЗААВАР.md-ийн "Өөрийн домэйн" хэсгийг үзнэ.
+name: volleyball-zone-tunnel
+services:
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.1
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://app:8080
+    networks:
+      - vz
+networks:
+  vz:
+    external: true
+    name: volleyball-zone_default
